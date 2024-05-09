@@ -21,14 +21,12 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard, AccessControl {
         mapping(address => bool) hasVoted;
     }
 
-    uint256 public minQuorumPercent = 25; // Minimum quorum needed for proposal votes
     Proposal[] public proposals;
 
     event FeesRedirected(uint256 amount, address to);
     event ProposalCreated(uint256 id, string description);
     event Voted(uint256 id, address voter, bool vote, uint256 weight);
     event ProposalExecuted(uint256 id, bool successful, string description);
-    event RoleUpdated(bytes32 role, address account, bool isGranted);
 
     constructor(address _treasuryAddress) ERC20("RingoToken", "RNG") {
         _mint(msg.sender, initialSupply);
@@ -59,11 +57,9 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard, AccessControl {
 
     function setFeeExemption(address account, bool isExempt) public onlyRole(ADMIN_ROLE) {
         feeExempted[account] = isExempt;
-        emit RoleUpdated(ADMIN_ROLE, account, isExempt);
     }
 
     function createProposal(string memory description) public {
-        require(bytes(description).length > 0, "Description cannot be empty");
         proposals.push(Proposal({
             description: description,
             executed: false,
@@ -96,8 +92,6 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard, AccessControl {
         require(!proposal.executed, "Proposal already executed");
         require(proposal.affirmativeVotes > proposal.negativeVotes, "More votes against than for");
         require(hasRole(ADMIN_ROLE, msg.sender), "Caller is not an admin");
-        uint256 totalVotes = proposal.affirmativeVotes + proposal.negativeVotes;
-        require(totalVotes >= (totalSupply() * minQuorumPercent) / 100, "Quorum not met");
 
         proposal.executed = true;
         emit ProposalExecuted(proposalId, true, proposal.description);
