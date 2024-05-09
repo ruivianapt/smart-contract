@@ -4,11 +4,14 @@ pragma solidity ^0.8.4;
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
-contract RingoToken is ERC20, Ownable, ReentrancyGuard {
+contract RingoToken is ERC20, Ownable, ReentrancyGuard, AccessControl {
     uint256 public initialSupply = 1000000 * (10 ** 18); // 1 million tokens with 18 decimal places
     uint256 public transactionFeeRate = 25; // Initial transaction fee rate: 0.25%
+    address public treasuryAddress; // Treasury address for storing fees
     mapping(address => bool) public feeExempted; // Addresses that are exempt from transaction fees
+    bytes32 public constant ADMIN_ROLE = keccak256("ADMIN_ROLE");
 
     struct Proposal {
         string description;
@@ -20,25 +23,27 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard {
 
     Proposal[] public proposals;
 
-    event FeesWithdrawn(uint256 amount, address to);
+    event FeesRedirected(uint256 amount, address to);
     event ProposalCreated(uint256 id, string description);
     event Voted(uint256 id, address voter, bool vote, uint256 weight);
     event ProposalExecuted(uint256 id, bool successful, string description);
 
-    constructor() ERC20("RingoToken", "RNG") {
+    constructor(address _treasuryAddress) ERC20("RingoToken", "RNG") {
         _mint(msg.sender, initialSupply);
-        feeExempted[msg.sender] = true;
+        treasuryAddress = _treasuryAddress;
+        _setupRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _setupRole(ADMIN_ROLE, msg.sender);
+        feeExempted[msg.sender] = true; // Owner is exempted by default
     }
 
-    // Override to include ReentrancyGuard
     function transfer(address recipient, uint256 amount) public override nonReentrant returns (bool) {
         uint256 fee = calculateFee(amount);
         uint256 amountAfterFee = amount - fee;
         
         _transfer(_msgSender(), recipient, amountAfterFee);
         if (fee > 0 && !feeExempted[_msgSender()]) {
-            _transfer(_msgSender(), address(this), fee);
-            _burn(address(this), fee); // Burn the fees to prevent circulation increase
+            _transfer(_msgSender(), treasuryAddress, fee);
+            emit FeesRedirected(fee, treasuryAddress);
         }
         return true;
     }
@@ -50,14 +55,11 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard {
         return (amount * transactionFeeRate) / 10000;
     }
 
-    // Withdraw fees as tokens instead of ETH
-    function withdrawFees(address to) public onlyOwner {
-        uint256 fees = balanceOf(address(this));
-        _transfer(address(this), to, fees);
-        emit FeesWithdrawn(fees, to);
+    function setFeeExemption(address account, bool isExempt) public onlyRole(ADMIN_ROLE) {
+        feeExempted[account] = isExempt;
     }
 
-    function createProposal(string memory description) public onlyOwner {
+    function createProposal(string memory description) public {
         proposals.push(Proposal({
             description: description,
             executed: false,
@@ -67,7 +69,6 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard {
         emit ProposalCreated(proposals.length - 1, description);
     }
 
-    // Allow voting against proposals
     function voteOnProposal(uint256 proposalId, bool approve) public {
         require(proposalId < proposals.length, "Invalid proposal ID");
         Proposal storage proposal = proposals[proposalId];
@@ -85,18 +86,19 @@ contract RingoToken is ERC20, Ownable, ReentrancyGuard {
         emit Voted(proposalId, _msgSender(), approve, weight);
     }
 
-    function executeProposal(uint256 proposalId) public onlyOwner {
+    function executeProposal(uint256 proposalId) public {
         require(proposalId < proposals.length, "Invalid proposal ID");
         Proposal storage proposal = proposals[proposalId];
         require(!proposal.executed, "Proposal already executed");
         require(proposal.affirmativeVotes > proposal.negativeVotes, "More votes against than for");
+        require(hasRole(ADMIN_ROLE, msg.sender), "Caller is not an admin");
 
         proposal.executed = true;
-        // Implementation logic based on the proposal's description or id
         emit ProposalExecuted(proposalId, true, proposal.description);
+        // Implementation logic based on the proposal's description or id
     }
 
-    function adjustTransactionFee(uint256 newFeeRate) public onlyOwner {
+    function adjustTransactionFee(uint256 newFeeRate) public onlyRole(ADMIN_ROLE) {
         require(newFeeRate <= 100, "Fee rate too high"); // Max 1%
         transactionFeeRate = newFeeRate;
     }
